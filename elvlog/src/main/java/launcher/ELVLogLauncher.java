@@ -25,7 +25,6 @@ import org.semanticweb.vlog4j.core.reasoner.implementation.RdfFileDataSource;
 import org.semanticweb.vlog4j.core.reasoner.implementation.VLogReasoner;
 
 import reasoner.OWLToRulesConverter;
-import reasoner.SpecialURIs;
 
 public class ELVLogLauncher {
 
@@ -37,18 +36,23 @@ public class ELVLogLauncher {
 
 	public static void main(String[] arguments) throws OWLOntologyCreationException, IOException {
 		String owlOntologyFilePath = "/Users/carralma/Desktop/elvlog-eval-files/ontologies/uniprot/elvlog/uniprot-swrl-el-nf-xml-tbox.owl";
-		String dataFilePath = "/Users/carralma/Desktop/elvlog-eval-files/ontologies/uniprot/elvlog/uniprot015.nt";
+		String dataFilePath = "/Users/carralma/Desktop/elvlog-eval-files/ontologies/uniprot/elvlog/uniprot005.nt";
 
+		// Loading TBox
 		long start = System.nanoTime();
-		System.out.println(" > TBox axioms into Rules: " + nanosecondsToSeconds(System.nanoTime() - start));
+		System.out.println(" > Loading TBox: " + nanotoSeconds(System.nanoTime() - start));
 		File owlOntologyFile = new File(owlOntologyFilePath);
 		OWLOntology ontology = OWLManager.createOWLOntologyManager().loadOntologyFromOntologyDocument(owlOntologyFile);
+
+		// Transforming TBox Axioms into Rules
+		System.out.println(" > Transforming TBox Axioms into Rules: " + nanotoSeconds(System.nanoTime() - start));
 		OWLToRulesConverter owlToRulesTransformer = new OWLToRulesConverter();
 		Set<Rule> ruleSet = owlToRulesTransformer.transform(ontology);
 		final KnowledgeBase kb = new KnowledgeBase();
 		kb.addStatements(ruleSet);
 
-		System.out.println(" > Instantiating loading rules: " + nanosecondsToSeconds(System.nanoTime() - start));
+		// Instantiating Loading Rules
+		System.out.println(" > Instantiating loading rules: " + nanotoSeconds(System.nanoTime() - start));
 		Set<Predicate> predicates = new HashSet<Predicate>();
 		for (Rule rule : kb.getRules()) {
 			Set<Literal> ruleAtoms = new HashSet<Literal>();
@@ -57,7 +61,6 @@ public class ELVLogLauncher {
 			for (Literal atom : ruleAtoms)
 				predicates.add(atom.getPredicate());
 		}
-		predicates.add(Expressions.makePredicate(SpecialURIs.owlNamedIndividual, 1));
 
 		for (Predicate predicate : predicates) {
 			Rule rule = null;
@@ -72,24 +75,25 @@ public class ELVLogLauncher {
 			kb.addStatement(rule);
 		}
 
-		System.out.println(" > Loading data sources: " + nanosecondsToSeconds(System.nanoTime() - start));
+		// Loading ABox
+		System.out.println(" > Loading ABox: " + nanotoSeconds(System.nanoTime() - start));
 		File dataFile = new File(dataFilePath);
 		DataSource dataSource = new RdfFileDataSource(dataFile);
 		DataSourceDeclarationImpl ds = new DataSourceDeclarationImpl(triple, dataSource);
 		kb.addStatement(ds);
 
-		System.out.println(" > Reasoning: " + nanosecondsToSeconds(System.nanoTime() - start));
+		// Materialisation
+		System.out.println(" > Materialisation: " + nanotoSeconds(System.nanoTime() - start));
 		Reasoner reasoner = new VLogReasoner(kb);
 		reasoner.reason();
 
-		System.out.println(" > Finished: " + nanosecondsToSeconds(System.nanoTime() - start));
+		// Finished
+		System.out.println(" > Finished: " + nanotoSeconds(System.nanoTime() - start));
 
+		// Checking Results
 		predicates.add(triple);
 		System.out.println(predicates.size());
 		visiualiseFactCounts(predicates, reasoner);
-
-		// visualiseFacts(triple, reasoner);
-
 	}
 
 	private static String trim(String name) {
@@ -113,23 +117,23 @@ public class ELVLogLauncher {
 		}
 	}
 
-	private static String nanosecondsToSeconds(long nanoseconds) {
+	private static String nanotoSeconds(long nanoseconds) {
 		return Float.toString(nanoseconds / 1000000000);
 	}
 
-	// private static void visualiseFacts(Predicate predicate, Reasoner reasoner) {
-	// List<Term> variables = new ArrayList<Term>();
-	// for (int i = 0; i < predicate.getArity(); i++)
-	// variables.add(Expressions.makeUniversalVariable("VX" + Integer.toString(i)));
-	// QueryResultIterator iterator =
-	// reasoner.answerQuery(Expressions.makePositiveLiteral(predicate, variables),
-	// true);
-	// while (iterator.hasNext())
-	// System.out.println(iterator.next());
-	// System.out.println();
-	// }
 }
 
+// private static void visualiseFacts(Predicate predicate, Reasoner reasoner) {
+// List<Term> variables = new ArrayList<Term>();
+// for (int i = 0; i < predicate.getArity(); i++)
+// variables.add(Expressions.makeUniversalVariable("VX" + Integer.toString(i)));
+// QueryResultIterator iterator =
+// reasoner.answerQuery(Expressions.makePositiveLiteral(predicate, variables),
+// true);
+// while (iterator.hasNext())
+// System.out.println(iterator.next());
+// System.out.println();
+// }
 // OWLOntologyManager manager = OWLManager.createOWLOntologyManager();
 // OWLDataFactory factory = manager.getOWLDataFactory();
 //

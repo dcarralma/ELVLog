@@ -7,15 +7,18 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.semanticweb.owlapi.apibinding.OWLManager;
+import org.semanticweb.owlapi.model.OWLAnnotation;
 import org.semanticweb.owlapi.model.OWLAxiom;
-import org.semanticweb.owlapi.model.OWLClass;
 import org.semanticweb.owlapi.model.OWLClassExpression;
+import org.semanticweb.owlapi.model.OWLDataFactory;
 import org.semanticweb.owlapi.model.OWLDisjointClassesAxiom;
 import org.semanticweb.owlapi.model.OWLEquivalentClassesAxiom;
 import org.semanticweb.owlapi.model.OWLEquivalentObjectPropertiesAxiom;
 import org.semanticweb.owlapi.model.OWLIrreflexiveObjectPropertyAxiom;
 import org.semanticweb.owlapi.model.OWLObjectHasSelf;
 import org.semanticweb.owlapi.model.OWLObjectHasValue;
+import org.semanticweb.owlapi.model.OWLObjectIntersectionOf;
 import org.semanticweb.owlapi.model.OWLObjectMinCardinality;
 import org.semanticweb.owlapi.model.OWLObjectOneOf;
 import org.semanticweb.owlapi.model.OWLObjectProperty;
@@ -31,263 +34,177 @@ import org.semanticweb.owlapi.model.OWLSubPropertyChainOfAxiom;
 import org.semanticweb.owlapi.model.OWLTransitiveObjectPropertyAxiom;
 import org.semanticweb.owlapi.model.SWRLArgument;
 import org.semanticweb.owlapi.model.SWRLAtom;
+import org.semanticweb.owlapi.model.SWRLIndividualArgument;
 import org.semanticweb.owlapi.model.SWRLRule;
+import org.semanticweb.owlapi.model.SWRLVariable;
+import org.semanticweb.vlog4j.core.model.api.AbstractConstant;
 import org.semanticweb.vlog4j.core.model.api.Conjunction;
-import org.semanticweb.vlog4j.core.model.api.Literal;
 import org.semanticweb.vlog4j.core.model.api.PositiveLiteral;
 import org.semanticweb.vlog4j.core.model.api.Rule;
+import org.semanticweb.vlog4j.core.model.api.Term;
+import org.semanticweb.vlog4j.core.model.api.UniversalVariable;
+import org.semanticweb.vlog4j.core.model.api.Variable;
 import org.semanticweb.vlog4j.core.model.implementation.Expressions;
 
+import uk.ac.manchester.cs.owl.owlapi.OWLObjectHasSelfImpl;
 import uk.ac.manchester.cs.owl.owlapi.OWLObjectSomeValuesFromImpl;
+import uk.ac.manchester.cs.owl.owlapi.OWLSubClassOfAxiomImpl;
+import uk.ac.manchester.cs.owl.owlapi.OWLSubPropertyChainAxiomImpl;
 
 public class OWLToRulesConverter {
 
-	private int freshVarCounter;
-	private int freshConstCounter;
-	private Set<VRule> subRoleSelfRules;
-	private boolean containsSelf;
+	private Set<Rule> rules = new HashSet<Rule>();
+	private Set<Rule> subRoleSelfRules = new HashSet<Rule>();
+	private boolean containsSelf = false;
 
-	private static String vX = "VX";
-	private static String vY = "VY";
-	private static String vZ = "VZ";
+	private static Variable vX = Expressions.makeUniversalVariable("VX");
+	private static Variable vY = Expressions.makeUniversalVariable("VY");
+	private int freshVarCounter = 0;
+	private int freshConstCounter = 0;
+	private static String variablePref = "V";
+	private static String constantPref = "cons";
+	OWLDataFactory factory = OWLManager.getOWLDataFactory();
 
 	public OWLToRulesConverter() {
-		freshVarCounter = 0;
-		freshConstCounter = 0;
-		subRoleSelfRules = new HashSet<VRule>();
-		containsSelf = false;
+
 	}
 
 	public Set<Rule> transform(OWLOntology ontology) {
-		Set<VRule> rules = new HashSet<VRule>();
 		// Transforming axioms to rules
-		for (OWLAxiom axiom : ontology.getAxioms())
-			transformAxiomToRule(rules, axiom);
+		ontology.axioms().forEach(axiom -> transformAxiomToRule(axiom));
 
 		// Adding self rules
 		if (containsSelf) {
-			for (OWLObjectProperty role : ontology.getObjectPropertiesInSignature()) {
-				rules.add(new VRule(new VAtom(roleToRoleSelfConcept(role), vX), new VAtom(role, vX, vX),
-						new VAtom(SpecialURIs.owlNamedIndividual, vX)));
-				rules.add(new VRule(new VAtom(role, vX, vX), new VAtom(SpecialURIs.owlNamedIndividual, vX),
-						new VAtom(roleToRoleSelfConcept(role), vX)));
-			}
+			ontology.objectPropertiesInSignature().forEach(role -> {
+				PositiveLiteral roleXX = Expressions.makePositiveLiteral(role.toString(), vX, vX);
+				PositiveLiteral namedX = Expressions.makePositiveLiteral(SpecialURIs.owlNamedIndividual, vX);
+				PositiveLiteral selfRoleX = Expressions.makePositiveLiteral(roleToRoleSelfConcept(role), vX);
 
+				rules.add(Expressions.makeRule(Expressions.makePositiveConjunction(selfRoleX),
+						Expressions.makeConjunction(roleXX, namedX)));
+				rules.add(Expressions.makeRule(Expressions.makePositiveConjunction(roleXX),
+						Expressions.makeConjunction(selfRoleX, namedX)));
+			});
 			rules.addAll(subRoleSelfRules);
 		}
 
-		Set<Rule> vlogRules = new HashSet<Rule>();
-		for (VRule rule : rules) {
-			List<PositiveLiteral> headAtoms = new ArrayList<PositiveLiteral>();
-			for (VAtom headAtom : rule.getHead())
-				headAtoms.add(headAtom.toVLogAtom());
-			Conjunction<PositiveLiteral> head = Expressions.makePositiveConjunction(headAtoms);
-
-			List<Literal> bodyAtoms = new ArrayList<Literal>();
-			for (VAtom bodyAtom : rule.getBody())
-				bodyAtoms.add(bodyAtom.toVLogAtom());
-			Conjunction<Literal> body = Expressions.makeConjunction(bodyAtoms);
-
-			vlogRules.add(Expressions.makeRule(head, body));
-		}
-
-		return vlogRules;
+		return rules;
 	}
 
-	private Object transformAxiomToRule(Set<VRule> rules, OWLAxiom axiom) {
-		freshVarCounter = 0;
-		switch (axiom.getAxiomType().toString()) {
+	private void transformAxiomToRule(OWLAxiom axiom) {
 
+		switch (axiom.getAxiomType().toString()) {
 		case "EquivalentClasses":
 			// C1 equiv ... equiv Cn
-			List<OWLClassExpression> equivConcepts = ((OWLEquivalentClassesAxiom) axiom).getClassExpressionsAsList();
-			for (int i = 0; i < equivConcepts.size(); i++)
-				for (int j = 0; j < equivConcepts.size(); j++)
-					if (i != j)
-						rules.add(new VRule(expToAtoms(equivConcepts.get(i), vX, true),
-								expToAtoms(equivConcepts.get(j), vX, false)));
+			for (OWLSubClassOfAxiom equivSubClassOfAxiom : ((OWLEquivalentClassesAxiom) axiom).asOWLSubClassOfAxioms())
+				processSubClassOfAxiom(equivSubClassOfAxiom);
 			break;
 
 		case "SubClassOf":
 			// C sqsubseteq D
-			OWLSubClassOfAxiom subClassOfAxiom = (OWLSubClassOfAxiom) axiom;
-			rules.add(new VRule(expToAtoms(subClassOfAxiom.getSuperClass(), vX, true),
-					expToAtoms(subClassOfAxiom.getSubClass(), vX, false)));
+			processSubClassOfAxiom((OWLSubClassOfAxiom) axiom);
 			break;
 
 		case "DisjointClasses":
 			// C1 sqcap ... sqcap Cn sqsubseteq bot
-			List<OWLClassExpression> disjConcepts = ((OWLDisjointClassesAxiom) axiom).getClassExpressionsAsList();
-			for (int i = 0; i < disjConcepts.size(); i++)
-				for (int j = i + 1; j < disjConcepts.size(); j++) {
-					ArrayList<VAtom> bodyAtoms = new ArrayList<VAtom>();
-					bodyAtoms.addAll(expToAtoms(disjConcepts.get(i), vX, false));
-					bodyAtoms.addAll(expToAtoms(disjConcepts.get(j), vX, false));
-					rules.add(new VRule(new VAtom(SpecialURIs.owlNothing, vX), bodyAtoms));
-				}
+			for (OWLSubClassOfAxiom disjSubClassOfAxiom : ((OWLDisjointClassesAxiom) axiom).asOWLSubClassOfAxioms())
+				processSubClassOfAxiom(disjSubClassOfAxiom);
 			break;
 
 		case "ObjectPropertyDomain":
 			// dom(R) sqsubseteq D
 			OWLObjectPropertyDomainAxiom domainAxiom = (OWLObjectPropertyDomainAxiom) axiom;
-			rules.add(new VRule(expToAtoms(domainAxiom.getDomain(), vX, true),
-					new VAtom((OWLObjectProperty) domainAxiom.getProperty(), vX, vY)));
+			OWLObjectSomeValuesFrom subClass = new OWLObjectSomeValuesFromImpl(domainAxiom.getProperty(),
+					factory.getOWLThing());
+			processSubClassOfAxiom(
+					new OWLSubClassOfAxiomImpl(subClass, domainAxiom.getDomain(), new HashSet<OWLAnnotation>()));
 			break;
 
 		case "ObjectPropertyRange":
 			// ran(R) sqsubseteq D
 			OWLObjectPropertyRangeAxiom rangeAxiom = (OWLObjectPropertyRangeAxiom) axiom;
-			rules.add(new VRule(expToAtoms(rangeAxiom.getRange(), vY, true),
-					new VAtom((OWLObjectProperty) rangeAxiom.getProperty(), vX, vY)));
+			Conjunction<PositiveLiteral> head = conceptExpToPosConjunction(rangeAxiom.getRange(), vY, true);
+			Conjunction<PositiveLiteral> body = Expressions.makePositiveConjunction(
+					Expressions.makePositiveLiteral(rangeAxiom.getProperty().toString(), vX, vY));
+			rules.add(Expressions.makePositiveLiteralsRule(head, body));
 			break;
 
 		case "ReflexiveObjectProperty":
 			// Ref(R)
-			OWLObjectProperty reflexiveRole = (OWLObjectProperty) ((OWLReflexiveObjectPropertyAxiom) axiom)
-					.getProperty();
-			String roleSelfConcept = roleToRoleSelfConcept(reflexiveRole);
-			rules.add(new VRule(new VAtom(roleSelfConcept, vX), new VAtom(SpecialURIs.owlThing, vX)));
+			OWLReflexiveObjectPropertyAxiom reflexiveAxiom = ((OWLReflexiveObjectPropertyAxiom) axiom);
+			OWLObjectHasSelf selfSuperClass = new OWLObjectHasSelfImpl(reflexiveAxiom.getProperty());
+			processSubClassOfAxiom(
+					new OWLSubClassOfAxiomImpl(factory.getOWLThing(), selfSuperClass, new HashSet<OWLAnnotation>()));
 			containsSelf = true;
 			break;
 
 		case "IrrefexiveObjectProperty":
 			// Irref(R)
-			OWLObjectProperty irreflexiveRole = (OWLObjectProperty) ((OWLIrreflexiveObjectPropertyAxiom) axiom)
-					.getProperty();
-			rules.add(new VRule(new VAtom(SpecialURIs.owlNothing, vX),
-					new VAtom(roleToRoleSelfConcept(irreflexiveRole), vX)));
+			OWLIrreflexiveObjectPropertyAxiom irreflexiveAxiom = ((OWLIrreflexiveObjectPropertyAxiom) axiom);
+			OWLObjectHasSelf selfSubClass = new OWLObjectHasSelfImpl(irreflexiveAxiom.getProperty());
+			processSubClassOfAxiom(
+					new OWLSubClassOfAxiomImpl(selfSubClass, factory.getOWLNothing(), new HashSet<OWLAnnotation>()));
 			containsSelf = true;
 			break;
 
 		case "EquivalentObjectProperties":
 			// R equiv S
-			ArrayList<OWLObjectPropertyExpression> equivRoles = new ArrayList<OWLObjectPropertyExpression>(
-					((OWLEquivalentObjectPropertiesAxiom) axiom).getObjectPropertiesInSignature());
-			// List<OWLObjectPropertyExpression> equivRoles = new
-			// ArrayList<OWLObjectPropertyExpression>(
-			// ((OWLEquivalentObjectPropertiesAxiom) axiom).properties());
-			for (int i = 0; i < equivRoles.size(); i++)
-				for (int j = 0; j < equivRoles.size(); j++)
-					if (i != j) {
-						OWLObjectProperty objectRolei = (OWLObjectProperty) equivRoles.get(i);
-						OWLObjectProperty objectRolej = (OWLObjectProperty) equivRoles.get(j);
-						rules.add(new VRule(new VAtom(objectRolei, vX, vY), new VAtom(objectRolej, vX, vY)));
-						subRoleSelfRules.add(new VRule(new VAtom(roleToRoleSelfConcept(objectRolei), vX),
-								new VAtom(roleToRoleSelfConcept(objectRolej), vX)));
-					}
+			OWLEquivalentObjectPropertiesAxiom equivPropertiesAxiom = (OWLEquivalentObjectPropertiesAxiom) axiom;
+			for (OWLSubObjectPropertyOfAxiom equivSubObjectPropertyAxiom : equivPropertiesAxiom
+					.asSubObjectPropertyOfAxioms()) {
+				processSubObjectPropertyAxiom(equivSubObjectPropertyAxiom);
+			}
 			break;
 
 		case "SubObjectPropertyOf":
 			// R sqsubseteq S
-			OWLSubObjectPropertyOfAxiom subObjectPropertyOfAxiom = (OWLSubObjectPropertyOfAxiom) axiom;
-			OWLObjectProperty superRole = (OWLObjectProperty) subObjectPropertyOfAxiom.getSuperProperty();
-			OWLObjectProperty subRole = (OWLObjectProperty) subObjectPropertyOfAxiom.getSubProperty();
-			rules.add(new VRule(new VAtom(superRole, vX, vY), new VAtom(subRole, vX, vY)));
-			subRoleSelfRules.add(new VRule(new VAtom(roleToRoleSelfConcept(superRole), vX),
-					new VAtom(roleToRoleSelfConcept(subRole), vX)));
+			processSubObjectPropertyAxiom((OWLSubObjectPropertyOfAxiom) axiom);
 			break;
 
 		case "SubPropertyChainOf":
 			// R1 o ... o Rn sqsubseteq S with n > 1
-			OWLSubPropertyChainOfAxiom chainOfAxiom = (OWLSubPropertyChainOfAxiom) axiom;
-			List<OWLObjectPropertyExpression> roleChain = chainOfAxiom.getPropertyChain();
-			ArrayList<VAtom> bodyAtoms = new ArrayList<VAtom>();
-			for (OWLObjectPropertyExpression chainedRole : roleChain)
-				bodyAtoms.add(new VAtom((OWLObjectProperty) chainedRole, vX + freshVarCounter, vX + ++freshVarCounter));
-			rules.add(new VRule(
-					new VAtom((OWLObjectProperty) chainOfAxiom.getSuperProperty(), vX + "0", vX + freshVarCounter),
-					bodyAtoms));
-			// System.out.println(new VRule(new VAtom((OWLObjectProperty)
-			// chainOfAxiom.getSuperProperty(), vX + "0", vX + freshVarCounter),
-			// bodyAtoms).toOxRules());
+			processChainOfAxiom((OWLSubPropertyChainOfAxiom) axiom);
 			break;
 
 		case "TransitiveObjectProperty":
 			// Tran(R)
-			String transitiveRoleR = ((OWLTransitiveObjectPropertyAxiom) axiom).getProperty().toString();
-			rules.add(new VRule(new VAtom(transitiveRoleR, vX, vY), new VAtom(transitiveRoleR, vX, vZ),
-					new VAtom(transitiveRoleR, vZ, vY)));
+			OWLTransitiveObjectPropertyAxiom transitivityAxiom = (OWLTransitiveObjectPropertyAxiom) axiom;
+			OWLObjectPropertyExpression transitiveProperty = transitivityAxiom.getProperty();
+			List<OWLObjectPropertyExpression> chain = new ArrayList<OWLObjectPropertyExpression>();
+			chain.add(transitiveProperty);
+			chain.add(transitiveProperty);
+			processChainOfAxiom(
+					new OWLSubPropertyChainAxiomImpl(chain, transitiveProperty, new HashSet<OWLAnnotation>()));
 			break;
 
 		case "Rule":
 			// SWRL Rule
-			// System.out.println(axiom);
-			rules.add(swrlRuleToRule((SWRLRule) axiom));
+			processSWRLRule((SWRLRule) axiom);
 			break;
 
 		case "ClassAssertion":
 			// C(a)
 			System.out.println("WARNING!!! Class assertion in the TBox: " + axiom);
-			// OWLClassAssertionAxiom classAssertion = (OWLClassAssertionAxiom) axiom;
-			// OWLClassExpression classExpressionC = classAssertion.getClassExpression();
-			// OWLIndividual individuala = classAssertion.getIndividual();
-			// if (!classExpressionC.isOWLThing()) {
-			// if
-			// (classExpressionC.getClassExpressionType().equals(ClassExpressionType.OWL_CLASS))
-			// store.addTriples(new VAtom((OWLClass) classExpressionC,
-			// individuala).toGroundTermFact());
-			// else if
-			// (classExpressionC.getComplementNNF().getClassExpressionType().equals(ClassExpressionType.OWL_CLASS))
-			// {
-			// store.importText(
-			// new VRule(new VAtom(SWURIs.owlNothing, individuala), new VAtom((OWLClass)
-			// classExpressionC.getComplementNNF(), individuala)).toOxRules());
-			// } else {
-			// System.out.println("WARNING!!! Invalid ClassAssertion axiom at ELVNReasoner
-			// at ELVNReasoner.java." + "\n" + " > " + classAssertion + "\n" + " > "
-			// + classExpressionC + "\n");
-			// validOntology = false;
-			// }
-			// }
 			break;
 
 		case "ObjectPropertyAssertion":
 			// R(a, b)
 			System.out.println("WARNING!!! Role assertion in the TBox: " + axiom);
-			// OWLObjectPropertyAssertionAxiom objectAssertion =
-			// (OWLObjectPropertyAssertionAxiom) axiom;
-			// store.addTriples(new VAtom((OWLObjectProperty) objectAssertion.getProperty(),
-			// objectAssertion.getSubject(),
-			// objectAssertion.getObject()).toGroundTermFact());
 			break;
 
 		case "NegativeObjectPropertyAssertion":
 			// lnot R(a, b)
 			System.out.println("WARNING!!! Negative role assertion in the TBox: " + axiom);
-			// OWLNegativeObjectPropertyAssertionAxiom negativeRoleAssertion =
-			// (OWLNegativeObjectPropertyAssertionAxiom) axiom;
-			// store.importText(new VRule(new VAtom(SWURIs.owlNothing,
-			// negativeRoleAssertion.getSubject()),
-			// new VAtom((OWLObjectProperty) negativeRoleAssertion.getProperty(),
-			// negativeRoleAssertion.getSubject(), negativeRoleAssertion.getObject()))
-			// .toOxRules());
 			break;
 
 		case "SameIndividual":
 			// a1 approx ... approx an
 			System.out.println("WARNING!!! Same individuals assertion in the TBox: " + axiom);
-			// OWLSameIndividualAxiom sameIndividualAxiom = (OWLSameIndividualAxiom) axiom;
-			// List<OWLIndividual> individualList =
-			// sameIndividualAxiom.getIndividualsAsList();
-			// for (int i = 0; i < individualList.size(); i++)
-			// for (int j = i + 1; j < individualList.size(); j++)
-			// store.addTriples(new VAtom(SWURIs.owlSameAs, individualList.get(i),
-			// individualList.get(j)).toGroundTermFact());
 			break;
 
 		case "DifferentIndividuals":
 			// a not approx b
 			System.out.println("WARNING!!! Different individuals assertion in the TBox: " + axiom);
-			// OWLDifferentIndividualsAxiom differentIndividualAxiom =
-			// (OWLDifferentIndividualsAxiom) axiom;
-			// List<OWLIndividual> differentIndividualsList =
-			// differentIndividualAxiom.getIndividualsAsList();
-			// for (int i = 0; i < differentIndividualsList.size(); i++)
-			// for (int j = i + 1; j < differentIndividualsList.size(); j++)
-			// store.importText(new VRule(new VAtom(SWURIs.owlNothing,
-			// differentIndividualsList.get(i)),
-			// new VAtom(SWURIs.owlSameAs, differentIndividualsList.get(i),
-			// differentIndividualsList.get(j))).toOxRules());
 			break;
 
 		case "AnnotationAssertion":
@@ -301,115 +218,166 @@ public class OWLToRulesConverter {
 					+ axiom.getAxiomType().toString() + "\n" + " > " + axiom + "\n");
 			break;
 		}
-		return null;
 	}
 
-	private VRule swrlRuleToRule(SWRLRule safeRule) {
+	private void processSubClassOfAxiom(OWLSubClassOfAxiom subClassOfAxiom) {
+		freshVarCounter = 0;
+		rules.add(Expressions.makePositiveLiteralsRule(
+				conceptExpToPosConjunction(subClassOfAxiom.getSuperClass(), vX, true),
+				conceptExpToPosConjunction(subClassOfAxiom.getSubClass(), vX, false)));
+	}
 
-		Set<SWRLAtom> swrlBody = safeRule.getBody();
-		Set<SWRLAtom> swrlHead = safeRule.getHead();
+	private void processSubObjectPropertyAxiom(OWLSubObjectPropertyOfAxiom subObjectPropertyOfAxiom) {
+		OWLObjectProperty subRole = (OWLObjectProperty) subObjectPropertyOfAxiom.getSubProperty();
+		OWLObjectProperty superRole = (OWLObjectProperty) subObjectPropertyOfAxiom.getSuperProperty();
 
+		rules.add(Expressions.makeRule(Expressions.makePositiveLiteral(superRole.toString(), vX, vY),
+				Expressions.makePositiveLiteral(subRole.toString(), vX, vY)));
+		rules.add(Expressions.makeRule(Expressions.makePositiveLiteral(roleToRoleSelfConcept(superRole), vX),
+				Expressions.makePositiveLiteral(roleToRoleSelfConcept(subRole), vX)));
+	}
+
+	private void processChainOfAxiom(OWLSubPropertyChainOfAxiom chainOfAxiom) {
+		freshVarCounter = 0;
+		List<OWLObjectPropertyExpression> roleChain = chainOfAxiom.getPropertyChain();
+		ArrayList<PositiveLiteral> bodyAtoms = new ArrayList<PositiveLiteral>();
+		for (OWLObjectPropertyExpression chainedRole : roleChain)
+			bodyAtoms.add(Expressions.makePositiveLiteral(chainedRole.toString(),
+					Expressions.makeUniversalVariable(variablePref + Integer.toString(freshVarCounter)),
+					Expressions.makeUniversalVariable(variablePref + Integer.toString(++freshVarCounter))));
+		Conjunction<PositiveLiteral> body = Expressions.makePositiveConjunction(bodyAtoms);
+		Conjunction<PositiveLiteral> head = Expressions.makePositiveConjunction(Expressions.makePositiveLiteral(
+				chainOfAxiom.getSuperProperty().toString(), Expressions.makeUniversalVariable(variablePref + "0"),
+				Expressions.makeUniversalVariable(variablePref + freshVarCounter)));
+		rules.add(Expressions.makePositiveLiteralsRule(head, body));
+	}
+
+	private void processSWRLRule(SWRLRule safeRule) {
+		freshVarCounter = 0;
+		Set<SWRLAtom> swrlBodyAtoms = safeRule.body().collect(Collectors.toSet());
+		Set<SWRLAtom> swrlHeadAtoms = safeRule.head().collect(Collectors.toSet());
 		Set<SWRLAtom> swrlAtoms = new HashSet<SWRLAtom>();
-		swrlAtoms.addAll(swrlBody);
-		swrlAtoms.addAll(swrlHead);
+		swrlAtoms.addAll(swrlBodyAtoms);
+		swrlAtoms.addAll(swrlHeadAtoms);
 
-		HashMap<SWRLArgument, String> safeVarToXVarMap = new HashMap<SWRLArgument, String>();
+		HashMap<SWRLArgument, UniversalVariable> safeVarToUnivVarMap = new HashMap<SWRLArgument, UniversalVariable>();
 		for (SWRLAtom safeAtom : swrlAtoms)
-			for (SWRLArgument safeArgument : safeAtom.getAllArguments())
-				if (safeArgument.toString().contains("Variable"))
-					safeVarToXVarMap.putIfAbsent(safeArgument, vX + Integer.toString(++freshVarCounter));
+			for (SWRLArgument safeArgument : safeAtom.allArguments().collect(Collectors.toSet()))
+				if (safeArgument instanceof SWRLVariable)
+					safeVarToUnivVarMap.putIfAbsent(safeArgument,
+							Expressions.makeUniversalVariable(variablePref + Integer.toString(++freshVarCounter)));
 
-		ArrayList<VAtom> head = new ArrayList<VAtom>();
-		for (SWRLAtom safeHeadAtom : swrlHead)
-			head.add(new VAtom(safeHeadAtom, safeVarToXVarMap));
+		ArrayList<PositiveLiteral> headAtoms = new ArrayList<PositiveLiteral>();
+		for (SWRLAtom safeHeadAtom : swrlHeadAtoms)
+			headAtoms.add(swrlAtomToPositiveLiteral(safeHeadAtom, safeVarToUnivVarMap));
+		Conjunction<PositiveLiteral> head = Expressions.makePositiveConjunction(headAtoms);
 
-		ArrayList<VAtom> body = new ArrayList<VAtom>();
-		for (SWRLAtom safeBodyAtom : swrlBody)
-			body.add(new VAtom(safeBodyAtom, safeVarToXVarMap));
-		for (String variable : safeVarToXVarMap.values())
-			body.add(new VAtom(SpecialURIs.owlNamedIndividual, variable));
+		ArrayList<PositiveLiteral> bodyAtoms = new ArrayList<PositiveLiteral>();
+		for (SWRLAtom safeBodyAtom : swrlBodyAtoms)
+			bodyAtoms.add(swrlAtomToPositiveLiteral(safeBodyAtom, safeVarToUnivVarMap));
+		for (UniversalVariable variable : safeVarToUnivVarMap.values())
+			bodyAtoms.add(Expressions.makePositiveLiteral(SpecialURIs.owlNamedIndividual, variable));
+		Conjunction<PositiveLiteral> body = Expressions.makePositiveConjunction(bodyAtoms);
 
-		// System.out.println(safeRule);
-		// System.out.println(new VRule(head, body).toOxRules());
-
-		return new VRule(head, body);
+		rules.add(Expressions.makePositiveLiteralsRule(head, body));
 	}
 
-	private ArrayList<VAtom> expToAtoms(OWLClassExpression conceptExpression, String term, boolean buildingHead) {
+	public PositiveLiteral swrlAtomToPositiveLiteral(SWRLAtom safeBodyAtom,
+			HashMap<SWRLArgument, UniversalVariable> safeVarToXVarMap) {
+		List<Term> terms = new ArrayList<Term>();
+		for (SWRLArgument arg : safeBodyAtom.allArguments().collect(Collectors.toList()))
+			if (arg instanceof SWRLVariable)
+				terms.add(safeVarToXVarMap.get(arg));
+			else if (arg instanceof SWRLIndividualArgument)
+				terms.add(Expressions.makeAbstractConstant(((SWRLIndividualArgument) arg).getIndividual().toString()));
+		
+		return Expressions.makePositiveLiteral(safeBodyAtom.getPredicate().toString(), terms);
+	}
 
-		ArrayList<VAtom> atoms = new ArrayList<VAtom>();
+	private Conjunction<PositiveLiteral> conceptExpToPosConjunction(OWLClassExpression conceptExp, Term term,
+			boolean buildingHead) {
+		return Expressions.makeConjunction(conceptExpToAtoms(conceptExp, term, buildingHead));
+	}
 
-		switch (conceptExpression.getClassExpressionType().toString()) {
+	private List<PositiveLiteral> conceptExpToAtoms(OWLClassExpression conceptExp, Term term, boolean buildingHead) {
+
+		ArrayList<PositiveLiteral> literals = new ArrayList<PositiveLiteral>();
+
+		switch (conceptExp.getClassExpressionType().toString()) {
 
 		case "ObjectIntersectionOf":
 			// C1 scap ... sqcap Cn
-			for (OWLClassExpression conjunctClassCi : conceptExpression.asConjunctSet())
-				atoms.addAll(expToAtoms(conjunctClassCi, term, buildingHead));
+			OWLObjectIntersectionOf intConceptExp = (OWLObjectIntersectionOf) conceptExp;
+			for (OWLClassExpression conjunctConceptExp : intConceptExp.asConjunctSet())
+				literals.addAll(conceptExpToAtoms(conjunctConceptExp, term, buildingHead));
 			break;
 
 		case "ObjectMinCardinality":
-			OWLObjectMinCardinality minCardRC = (OWLObjectMinCardinality) conceptExpression;
-			if (minCardRC.getCardinality() != 1) {
-				System.out
-						.println("WARNING!!! Illegal ObjectMinCardinality concept expression at StoreInitializer.java."
-								+ "\n" + " > " + conceptExpression.getClassExpressionType().toString() + "\n" + " > "
-								+ conceptExpression);
-			} else
-				conceptExpression = new OWLObjectSomeValuesFromImpl(minCardRC.getProperty(), minCardRC.getFiller());
+			OWLObjectMinCardinality minCardConceptExp = (OWLObjectMinCardinality) conceptExp;
+			if (minCardConceptExp.getCardinality() != 1) {
+				System.out.println(
+						"WARNING!!! Illegal ObjectMinCardinality concept expression at StoreInitializer.java." + "\n"
+								+ " > " + conceptExp.getClassExpressionType().toString() + "\n" + " > " + conceptExp);
+				break;
+			} else {
+				conceptExp = new OWLObjectSomeValuesFromImpl(minCardConceptExp.getProperty(),
+						minCardConceptExp.getFiller());
+			}
+
 		case "ObjectSomeValuesFrom":
 			// exists R.C
-			OWLObjectSomeValuesFrom existConceptRC = (OWLObjectSomeValuesFrom) conceptExpression;
-			OWLClassExpression fillerC = existConceptRC.getFiller();
-			String freshTerm;
+			OWLObjectSomeValuesFrom existConceptExp = (OWLObjectSomeValuesFrom) conceptExp;
+			OWLClassExpression filler = existConceptExp.getFiller();
+			Term freshTerm;
 			if (buildingHead) {
-				freshTerm = "cons" + ++freshConstCounter;
-				if (!fillerC.isOWLThing() && !fillerC.toString().equals("<owl:Thing>"))
-					atoms.add(new VAtom(SpecialURIs.owlThing, freshTerm));
+				freshTerm = Expressions.makeAbstractConstant(constantPref + ++freshConstCounter);
+				if (!filler.isOWLThing())
+					literals.add(Expressions.makePositiveLiteral(SpecialURIs.owlThing, freshTerm));
 			} else
-				freshTerm = vX + ++freshVarCounter;
-			atoms.add(new VAtom(existConceptRC.getProperty().toString(), term, freshTerm));
-			atoms.addAll(expToAtoms(fillerC, freshTerm, buildingHead));
+				freshTerm = Expressions.makeUniversalVariable(variablePref + ++freshVarCounter);
+			literals.add(Expressions.makePositiveLiteral(existConceptExp.getProperty().toString(), term, freshTerm));
+			literals.addAll(conceptExpToAtoms(filler, freshTerm, buildingHead));
 			break;
 
 		case "ObjectOneOf":
 			// {a1} sqcup ... sqcup {an}
-			OWLObjectOneOf nominalConceptExpression = (OWLObjectOneOf) conceptExpression;
+			OWLObjectOneOf nominalConceptExpression = (OWLObjectOneOf) conceptExp;
 			if (nominalConceptExpression.individuals().collect(Collectors.toSet()).size() > 1) {
 				System.out.println("WARNING!!! Illegal OWLObjectOneOf expression at StoreInitializer.java." + "\n"
 						+ " > " + nominalConceptExpression + "\n");
 			}
-			atoms.add(new VAtom(SpecialURIs.owlSameAs,
-					nominalConceptExpression.individuals().collect(Collectors.toSet()).iterator().next().toString(),
-					term));
+			AbstractConstant nominalConstant = Expressions.makeAbstractConstant(
+					nominalConceptExpression.individuals().collect(Collectors.toSet()).iterator().next().toString());
+			literals.add(Expressions.makePositiveLiteral(SpecialURIs.owlSameAs, term, nominalConstant));
 			break;
 
 		case "ObjectHasSelf":
 			// exists R.Self
 			containsSelf = true;
-			String roleSelfConcept = roleToRoleSelfConcept(
-					(OWLObjectProperty) ((OWLObjectHasSelf) conceptExpression).getProperty());
-			atoms.add(new VAtom(roleSelfConcept, term));
+			OWLObjectHasSelf selfConceptExp = (OWLObjectHasSelf) conceptExp;
+			String roleSelfConcept = roleToRoleSelfConcept((OWLObjectProperty) selfConceptExp.getProperty());
+			literals.add(Expressions.makePositiveLiteral(roleSelfConcept, term));
 			break;
 
 		case "ObjectHasValue":
 			// exists R.{a}
-			OWLObjectHasValue hasValueExpression = (OWLObjectHasValue) conceptExpression;
-			atoms.add(new VAtom((OWLObjectProperty) hasValueExpression.getProperty(), term,
-					hasValueExpression.getFiller()));
+			OWLObjectHasValue hasValueExp = (OWLObjectHasValue) conceptExp;
+			AbstractConstant valueConstant = Expressions.makeAbstractConstant(hasValueExp.getFiller().toString());
+			literals.add(Expressions.makePositiveLiteral(hasValueExp.getProperty().toString(), term, valueConstant));
 			break;
 
 		case "Class":
 			// A
-			atoms.add(new VAtom((OWLClass) conceptExpression, term));
+			literals.add(Expressions.makePositiveLiteral(conceptExp.toString(), term));
 			break;
 
 		default:
 			System.out.println("WARNING!!! Unrecognized type of concept expression at StoreInitializer.java." + "\n"
-					+ " > " + conceptExpression.getClassExpressionType().toString() + "\n" + " > " + conceptExpression);
+					+ " > " + conceptExp.getClassExpressionType().toString() + "\n" + " > " + conceptExp);
 			break;
 		}
 
-		return atoms;
+		return literals;
 	}
 
 	private String roleToRoleSelfConcept(OWLObjectProperty role) {
