@@ -29,7 +29,6 @@ import reasoner.OWLToRulesConverter;
 public class ELVLogLauncher {
 
 	static Predicate triple = Expressions.makePredicate("triple", 3);
-
 	static Variable vX = Expressions.makeUniversalVariable("VX");
 	static Variable vY = Expressions.makeUniversalVariable("VY");
 	static Variable vZ = Expressions.makeUniversalVariable("VZ");
@@ -120,53 +119,4 @@ public class ELVLogLauncher {
 	private static String nanotoSeconds(long nanoseconds) {
 		return Float.toString(nanoseconds / 1000000000);
 	}
-
 }
-
-// private static void visualiseFacts(Predicate predicate, Reasoner reasoner) {
-// List<Term> variables = new ArrayList<Term>();
-// for (int i = 0; i < predicate.getArity(); i++)
-// variables.add(Expressions.makeUniversalVariable("VX" + Integer.toString(i)));
-// QueryResultIterator iterator =
-// reasoner.answerQuery(Expressions.makePositiveLiteral(predicate, variables),
-// true);
-// while (iterator.hasNext())
-// System.out.println(iterator.next());
-// System.out.println();
-// }
-// OWLOntologyManager manager = OWLManager.createOWLOntologyManager();
-// OWLDataFactory factory = manager.getOWLDataFactory();
-//
-// OWLOntology inputOntology = manager
-// .loadOntologyFromOntologyDocument(new
-// File("/Users/carralma/Desktop/velox-evalution/files/tbox-files/2-normalised-tboxes/uniprot-normalised-tbox.owl"));
-// OWLOntology elNormalisedOntology = manager.createOntology();
-//
-// for (OWLAxiom axiom : inputOntology.getAxioms())
-// if (axiom.isOfType(AxiomType.SUBCLASS_OF)) {
-// OWLSubClassOfAxiom subClassOfAxiom = (OWLSubClassOfAxiom) axiom;
-// OWLClassExpression subClass = subClassOfAxiom.getSubClass();
-// OWLClassExpression superClass = subClassOfAxiom.getSuperClass();
-//
-// if (subClass.getClassExpressionType().equals(ClassExpressionType.OWL_CLASS)
-// &&
-// superClass.getClassExpressionType().equals(ClassExpressionType.OBJECT_ALL_VALUES_FROM))
-// {
-// OWLObjectAllValuesFrom allValuesSuperClass = (OWLObjectAllValuesFrom)
-// superClass;
-// manager.addAxiom(elNormalisedOntology, factory.getOWLSubClassOfAxiom(
-// factory.getOWLObjectSomeValuesFrom(allValuesSuperClass.getProperty().getInverseProperty(),
-// subClass), allValuesSuperClass.getFiller()));
-// System.out.println(axiom);
-// System.out.println(factory.getOWLSubClassOfAxiom(factory.getOWLObjectSomeValuesFrom(allValuesSuperClass.getProperty().getInverseProperty(),
-// subClass),
-// allValuesSuperClass.getFiller()));
-// System.out.println();
-// } else
-// manager.addAxiom(elNormalisedOntology, axiom);
-// } else
-// manager.addAxiom(elNormalisedOntology, axiom);
-//
-// manager.saveOntology(elNormalisedOntology, new
-// OWLFunctionalSyntaxOntologyFormat(),
-// IRI.create(new

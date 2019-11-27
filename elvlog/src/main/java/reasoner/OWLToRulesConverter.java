@@ -290,7 +290,7 @@ public class OWLToRulesConverter {
 				terms.add(safeVarToXVarMap.get(arg));
 			else if (arg instanceof SWRLIndividualArgument)
 				terms.add(Expressions.makeAbstractConstant(((SWRLIndividualArgument) arg).getIndividual().toString()));
-		
+
 		return Expressions.makePositiveLiteral(safeBodyAtom.getPredicate().toString(), terms);
 	}
 
