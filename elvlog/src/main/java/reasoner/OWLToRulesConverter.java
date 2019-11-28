@@ -19,7 +19,6 @@ import org.semanticweb.owlapi.model.OWLIrreflexiveObjectPropertyAxiom;
 import org.semanticweb.owlapi.model.OWLObjectHasSelf;
 import org.semanticweb.owlapi.model.OWLObjectHasValue;
 import org.semanticweb.owlapi.model.OWLObjectIntersectionOf;
-import org.semanticweb.owlapi.model.OWLObjectMinCardinality;
 import org.semanticweb.owlapi.model.OWLObjectOneOf;
 import org.semanticweb.owlapi.model.OWLObjectProperty;
 import org.semanticweb.owlapi.model.OWLObjectPropertyDomainAxiom;
@@ -27,6 +26,7 @@ import org.semanticweb.owlapi.model.OWLObjectPropertyExpression;
 import org.semanticweb.owlapi.model.OWLObjectPropertyRangeAxiom;
 import org.semanticweb.owlapi.model.OWLObjectSomeValuesFrom;
 import org.semanticweb.owlapi.model.OWLOntology;
+import org.semanticweb.owlapi.model.OWLOntologyCreationException;
 import org.semanticweb.owlapi.model.OWLReflexiveObjectPropertyAxiom;
 import org.semanticweb.owlapi.model.OWLSubClassOfAxiom;
 import org.semanticweb.owlapi.model.OWLSubObjectPropertyOfAxiom;
@@ -39,7 +39,9 @@ import org.semanticweb.owlapi.model.SWRLRule;
 import org.semanticweb.owlapi.model.SWRLVariable;
 import org.semanticweb.vlog4j.core.model.api.AbstractConstant;
 import org.semanticweb.vlog4j.core.model.api.Conjunction;
+import org.semanticweb.vlog4j.core.model.api.Literal;
 import org.semanticweb.vlog4j.core.model.api.PositiveLiteral;
+import org.semanticweb.vlog4j.core.model.api.Predicate;
 import org.semanticweb.vlog4j.core.model.api.Rule;
 import org.semanticweb.vlog4j.core.model.api.Term;
 import org.semanticweb.vlog4j.core.model.api.UniversalVariable;
@@ -54,30 +56,44 @@ import uk.ac.manchester.cs.owl.owlapi.OWLSubPropertyChainAxiomImpl;
 public class OWLToRulesConverter {
 
 	private Set<Rule> rules = new HashSet<Rule>();
+	private Set<Predicate> predicates = new HashSet<Predicate>();
+
 	private Set<Rule> subRoleSelfRules = new HashSet<Rule>();
 	private boolean containsSelf = false;
 
+	private static String variablePref = "V";
+	private int freshVarCounter = 0;
 	private static Variable vX = Expressions.makeUniversalVariable("VX");
 	private static Variable vY = Expressions.makeUniversalVariable("VY");
-	private int freshVarCounter = 0;
-	private int freshConstCounter = 0;
-	private static String variablePref = "V";
+
 	private static String constantPref = "cons";
+	private int freshConstCounter = 0;
+
 	OWLDataFactory factory = OWLManager.getOWLDataFactory();
 
-	public OWLToRulesConverter() {
-
+	public Set<Rule> getRules() {
+		return rules;
 	}
 
-	public Set<Rule> transform(OWLOntology ontology) {
+	public Set<Predicate> getPredicates() {
+		return predicates;
+	}
+
+	public OWLToRulesConverter(OWLOntology ontology) throws OWLOntologyCreationException {
+
+		// Filter axioms in the ontology
+		Set<OWLAxiom> filteredAxioms = Filter
+				.filterDataAndAnnotationAxioms(ontology.axioms().collect(Collectors.toSet()));
+
 		// Transforming axioms to rules
-		ontology.axioms().forEach(axiom -> transformAxiomToRule(axiom));
+		for (OWLAxiom filteredAxiom : filteredAxioms)
+			transformAxiomToRule(filteredAxiom);
 
 		// Adding self rules
 		if (containsSelf) {
 			ontology.objectPropertiesInSignature().forEach(role -> {
 				PositiveLiteral roleXX = Expressions.makePositiveLiteral(role.toString(), vX, vX);
-				PositiveLiteral namedX = Expressions.makePositiveLiteral(SpecialURIs.owlNamedIndividual, vX);
+				PositiveLiteral namedX = Expressions.makePositiveLiteral(SpecialPreds.namedPredName, vX);
 				PositiveLiteral selfRoleX = Expressions.makePositiveLiteral(roleToRoleSelfConcept(role), vX);
 
 				rules.add(Expressions.makeRule(Expressions.makePositiveConjunction(selfRoleX),
@@ -88,7 +104,31 @@ public class OWLToRulesConverter {
 			rules.addAll(subRoleSelfRules);
 		}
 
-		return rules;
+		// Computing the set of all predicates
+		for (Rule rule : rules) {
+			Set<Literal> ruleAtoms = new HashSet<Literal>();
+			ruleAtoms.addAll(rule.getBody().getLiterals());
+			ruleAtoms.addAll(rule.getHead().getLiterals());
+			for (Literal atom : ruleAtoms)
+				predicates.add(atom.getPredicate());
+		}
+		predicates.add(SpecialPreds.triplePred);
+
+		// Add loading rules
+		for (Predicate predicate : predicates) {
+			if (predicate.getArity() == 1)
+				rules.add(Expressions.makeRule(Expressions.makePositiveLiteral(predicate, vX),
+						Expressions.makePositiveLiteral(SpecialPreds.triplePredName, vX, vY,
+								Expressions.makeAbstractConstant(trim(predicate.getName())))));
+			else if (predicate.getArity() == 2)
+				rules.add(Expressions.makeRule(Expressions.makePositiveLiteral(predicate, vX, vY),
+						Expressions.makePositiveLiteral(SpecialPreds.triplePredName, vX,
+								Expressions.makeAbstractConstant(trim(predicate.getName())), vY)));
+		}
+	}
+
+	private static String trim(String name) {
+		return name.substring(1, name.length() - 1);
 	}
 
 	private void transformAxiomToRule(OWLAxiom axiom) {
@@ -106,7 +146,7 @@ public class OWLToRulesConverter {
 			break;
 
 		case "DisjointClasses":
-			// C1 sqcap ... sqcap Cn sqsubseteq bot
+			// C1 sqcap C2 \sqsubseteq \bot, C1 \sqcap C3 \sqsubseteq \bot, ...
 			for (OWLSubClassOfAxiom disjSubClassOfAxiom : ((OWLDisjointClassesAxiom) axiom).asOWLSubClassOfAxioms())
 				processSubClassOfAxiom(disjSubClassOfAxiom);
 			break;
@@ -276,7 +316,7 @@ public class OWLToRulesConverter {
 		for (SWRLAtom safeBodyAtom : swrlBodyAtoms)
 			bodyAtoms.add(swrlAtomToPositiveLiteral(safeBodyAtom, safeVarToUnivVarMap));
 		for (UniversalVariable variable : safeVarToUnivVarMap.values())
-			bodyAtoms.add(Expressions.makePositiveLiteral(SpecialURIs.owlNamedIndividual, variable));
+			bodyAtoms.add(Expressions.makePositiveLiteral(SpecialPreds.namedPredName, variable));
 		Conjunction<PositiveLiteral> body = Expressions.makePositiveConjunction(bodyAtoms);
 
 		rules.add(Expressions.makePositiveLiteralsRule(head, body));
@@ -312,17 +352,20 @@ public class OWLToRulesConverter {
 				literals.addAll(conceptExpToAtoms(conjunctConceptExp, term, buildingHead));
 			break;
 
-		case "ObjectMinCardinality":
-			OWLObjectMinCardinality minCardConceptExp = (OWLObjectMinCardinality) conceptExp;
-			if (minCardConceptExp.getCardinality() != 1) {
-				System.out.println(
-						"WARNING!!! Illegal ObjectMinCardinality concept expression at StoreInitializer.java." + "\n"
-								+ " > " + conceptExp.getClassExpressionType().toString() + "\n" + " > " + conceptExp);
-				break;
-			} else {
-				conceptExp = new OWLObjectSomeValuesFromImpl(minCardConceptExp.getProperty(),
-						minCardConceptExp.getFiller());
-			}
+		// case "ObjectMinCardinality":
+		// OWLObjectMinCardinality minCardConceptExp = (OWLObjectMinCardinality)
+		// conceptExp;
+		// if (minCardConceptExp.getCardinality() != 1) {
+		// System.out.println(
+		// "WARNING!!! Illegal ObjectMinCardinality concept expression at
+		// StoreInitializer.java." + "\n"
+		// + " > " + conceptExp.getClassExpressionType().toString() + "\n" + " > " +
+		// conceptExp);
+		// break;
+		// } else {
+		// conceptExp = new OWLObjectSomeValuesFromImpl(minCardConceptExp.getProperty(),
+		// minCardConceptExp.getFiller());
+		// }
 
 		case "ObjectSomeValuesFrom":
 			// exists R.C
@@ -332,7 +375,7 @@ public class OWLToRulesConverter {
 			if (buildingHead) {
 				freshTerm = Expressions.makeAbstractConstant(constantPref + ++freshConstCounter);
 				if (!filler.isOWLThing())
-					literals.add(Expressions.makePositiveLiteral(SpecialURIs.owlThing, freshTerm));
+					literals.add(Expressions.makePositiveLiteral(SpecialPreds.owlThingPredName, freshTerm));
 			} else
 				freshTerm = Expressions.makeUniversalVariable(variablePref + ++freshVarCounter);
 			literals.add(Expressions.makePositiveLiteral(existConceptExp.getProperty().toString(), term, freshTerm));
@@ -348,7 +391,7 @@ public class OWLToRulesConverter {
 			}
 			AbstractConstant nominalConstant = Expressions.makeAbstractConstant(
 					nominalConceptExpression.individuals().collect(Collectors.toSet()).iterator().next().toString());
-			literals.add(Expressions.makePositiveLiteral(SpecialURIs.owlSameAs, term, nominalConstant));
+			literals.add(Expressions.makePositiveLiteral(SpecialPreds.owlSameAsPredName, term, nominalConstant));
 			break;
 
 		case "ObjectHasSelf":
